@@ -36,7 +36,7 @@ func BuildClash(user model.User, lines []model.Line, entries []Entry, template, 
 	return BuildClashFull(user, lines, entries, template, notice, nil)
 }
 
-// BuildClashFull 生成一个用户的 clash 订阅 YAML,外部节点追加在本站节点之后;模板未定义 Proxy 时加入默认 Proxy/Auto 组。
+// BuildClashFull 生成一个用户的 clash 订阅 YAML,外部节点追加在本站节点之后并加入 Proxy/Auto 组。
 // notice 为可选的顶部提示节点名(如流量提示);为空则不注入。
 func BuildClashFull(user model.User, lines []model.Line, entries []Entry, template, notice string, external []ExtItem) (string, error) {
 	return BuildClashFor(user, lines, entries, template, notice, external, nil)
@@ -184,17 +184,7 @@ func BuildClashFor(user model.User, lines []model.Line, entries []Entry, templat
 		map[string]interface{}{"name": "Auto", "type": "url-test", "url": "http://www.gstatic.com/generate_204", "interval": 300, "tolerance": 50, "proxies": proxyNames},
 	}
 	groups = append(groups, lineGroups...)
-	if ownProxy {
-		// 模板自行定义 Proxy 时,只下发模板里的策略组。仍按默认路径起节点名,
-		// 避免外部节点在两种模式之间切换时改名。
-		own := root["proxy-groups"].([]interface{})
-		if _, ownAuto := tmplGroups["Auto"]; !ownAuto {
-			removeImplicitClashAuto(own, proxyNames)
-		}
-		root["proxy-groups"] = own
-	} else {
-		root["proxy-groups"] = mergeClashGroups(groups, root["proxy-groups"])
-	}
+	root["proxy-groups"] = mergeClashGroups(groups, root["proxy-groups"])
 	if _, ok := root["rules"]; !ok { // 模板没写规则:Clash 没规则时全部直连,等于没走代理
 		root["rules"] = []string{"GEOIP,Private,DIRECT", "MATCH,Proxy"}
 	}
@@ -229,37 +219,6 @@ func hasIPv6Server(proxies []interface{}) bool {
 		}
 	}
 	return false
-}
-
-// removeImplicitClashAuto 去掉旧模板对内置 Auto 的引用。只剩 Auto 的组继续使用
-// 原 Auto 的候选节点,避免生成空组或意外切到直连。
-func removeImplicitClashAuto(groups []interface{}, autoProxies []string) {
-	for _, group := range groups {
-		g, _ := group.(map[string]interface{})
-		members := stringList(g["proxies"])
-		var kept []string
-		removed := false
-		for _, name := range members {
-			if name == "Auto" {
-				removed = true
-			} else {
-				kept = append(kept, name)
-			}
-		}
-		if !removed {
-			continue
-		}
-		includeAll := g["include-all"] == true || g["include-all-proxies"] == true || g["include-all-providers"] == true
-		if len(kept) == 0 && len(stringList(g["use"])) == 0 && !includeAll {
-			kept = autoProxies
-		}
-		// 由 provider 或 include-all 提供成员时,省略空的 proxies。
-		if len(kept) == 0 {
-			delete(g, "proxies")
-		} else {
-			g["proxies"] = kept
-		}
-	}
 }
 
 // mergeClashGroups 模板里写的策略组和生成的合起来:同名的用模板的(放在生成的那个位置),其余的接在后面。
