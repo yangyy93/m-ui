@@ -402,7 +402,7 @@ func TestLineGroupNamesSameInClashAndSingBox(t *testing.T) {
 
 // Clash 模板里写了和线路同名的策略组:照旧用模板的(放在生成的那个位置),Proxy 列的就是它,不另补 hy 2;
 // 模板的这个组会绕回 Proxy(直接列、经别的组)时,用了就成环、mihomo 整份拒收,线路组改名另起,模板的不动;
-// 模板自己写了 Proxy 时生成的 Proxy 不出,同名的组列着 Proxy 也不成环,照样用模板的。
+// 模板自己写了 Proxy 时仅输出模板里的组。
 func TestClashTemplateLineGroup(t *testing.T) {
 	cert := raw(map[string]interface{}{"mode": "cert"})
 	lines := []model.Line{{Id: 1, Name: "hy", Protocol: "trojan", Port: 1001, Tls: cert, Enabled: true}}
@@ -436,6 +436,43 @@ func TestClashTemplateLineGroup(t *testing.T) {
 	doc = build("proxy-groups:\n  - {name: Proxy, type: select, proxies: [Auto, DIRECT]}\n  - {name: hy, type: select, proxies: [Proxy, hy-A, hy-B]}\n")
 	if doc.group("hy")["type"] != "select" || doc.group("hy 2") != nil {
 		t.Fatalf("模板写了 Proxy 时同名的组照样用模板的: %v", doc.Groups)
+	}
+	if got := groupNames(doc); !reflect.DeepEqual(got, []string{"Proxy", "hy"}) {
+		t.Fatalf("模板写了 Proxy 时不输出默认组: %v", got)
+	}
+	if got := stringList(doc.group("Proxy")["proxies"]); !reflect.DeepEqual(got, []string{"DIRECT"}) {
+		t.Fatalf("应去掉对内置 Auto 的引用: %v", got)
+	}
+
+	doc = build(`proxy-groups:
+  - {name: Proxy, type: select, proxies: [Auto, VPS-A, VPS-B]}
+  - {name: VPS-A, type: select, proxies: [hy-A]}
+  - {name: VPS-B, type: select, proxies: [hy-B]}
+rules:
+  - DOMAIN,example.test,DIRECT
+  - MATCH,Proxy
+`)
+	if got := groupNames(doc); !reflect.DeepEqual(got, []string{"Proxy", "VPS-A", "VPS-B"}) {
+		t.Fatalf("按服务器分组时不应附带线路组或 Auto: %v", got)
+	}
+	if got := stringList(doc.group("Proxy")["proxies"]); !reflect.DeepEqual(got, []string{"VPS-A", "VPS-B"}) {
+		t.Fatalf("Proxy 应只列自定义服务器组: %v", got)
+	}
+	if got := doc.proxyNames(); !reflect.DeepEqual(got, []string{"hy-A", "hy-B"}) {
+		t.Fatalf("节点应保留: %v", got)
+	}
+	if want := []string{"DOMAIN,example.test,DIRECT", "MATCH,Proxy"}; !reflect.DeepEqual(doc.Rules, want) {
+		t.Fatalf("模板的分流规则应原样保留: %v", doc.Rules)
+	}
+
+	doc = build("proxy-groups:\n  - {name: Proxy, type: select, proxies: [Auto]}\n")
+	if got := stringList(doc.group("Proxy")["proxies"]); !reflect.DeepEqual(got, []string{"hy-A", "hy-B"}) {
+		t.Fatalf("只引用默认 Auto 时改用原候选节点: %v", got)
+	}
+
+	doc = build("proxy-groups:\n  - {name: Proxy, type: select, proxies: [Auto]}\n  - {name: Auto, type: select, proxies: [hy-A]}\n")
+	if got := groupNames(doc); !reflect.DeepEqual(got, []string{"Proxy", "Auto"}) {
+		t.Fatalf("应保留模板显式定义的 Auto: %v", got)
 	}
 
 	for name, tmpl := range map[string]string{
